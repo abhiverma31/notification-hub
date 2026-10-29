@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link rel="stylesheet" href="styles.css">
+  <title>Firebase Push Notification Test Site</title>
+</head>
+<body>
+<h1>Firebase Push Notification Test Site</h1>
+<div id="error-block">
+  <h3 id="error-heading">Errors</h3>
+  <ul id="errors"></ul>
+</div>
+<h2>FCM Device Token</h2>
+<ul id="tokenDisplay">No registration token available. Allow notification permission to generate one.</ul>
+<br/>
+<h2>Received Notifications</h2>
+<ul id="notificationDisplay">
+  <li id="emptyNotifications">No notification received yet!</li>
+</ul>
+<script src="https://www.gstatic.com/firebasejs/8.6.1/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.6.1/firebase-messaging.js"></script>
+<script src="main.js"></script>
+</body>
+</html>

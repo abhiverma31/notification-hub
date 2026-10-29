@@ -1,0 +1,35 @@
+version: '3'
+services:
+
+  db:
+    image: mongo:latest
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo-data:/data/db
+
+  sqs:
+    image: queue:1.0
+    build:
+      context: .
+      dockerfile: Dockerfile-queue
+    ports:
+      - "9324:9324"
+      - "9325:9325"
+
+  mailhog:
+    image: anatomicjc/mailhog
+    ports:
+      - "1025:1025"  # SMTP port
+      - "8025:8025"
+  
+  fcm-web-client:
+    image: fcm-web-client:1.0
+    build:
+      context: .
+      dockerfile: Dockerfile-fcmClient
+    ports:
+      - "8080:80"
+
+volumes:
+  mongo-data:

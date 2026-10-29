@@ -1,0 +1,63 @@
+version: '3'
+services:
+  test:
+    image: notification-hub:1.0
+    build:
+      context: .
+      dockerfile: Dockerfile-test
+    working_dir: /app
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=test
+      - MONGO_CONNECTION_URL=mongodb://db:27017/
+      - SELENIUM_REMOTE_URL=http://chromedriver:4444/wd/hub
+      - MAIL_TRANSPORT_USER="test@technogise.com"
+      - MAIL_TRANSPORT_PASSWORD="pwd"
+      - API_SECRET="secret"
+      - FIREBASE_CLIENT_EMAIL=${FIREBASE_CLIENT_EMAIL}
+      - FIREBASE_PRIVATE_KEY=${FIREBASE_PRIVATE_KEY}
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}
+      - MAIL_SERVICE_PROVIDER="provider"
+      - SQS_OFFLINE_URL=http://sqs:9324
+      - QUEUE_URL="http://sqs:9324/queue"
+      - ACCOUNT_ID="test"
+      - IMG_BUCKET="test"
+      - CORS_WHITELIST_ORIGIN=${CORS_WHITELIST_ORIGIN}
+      - MAILER_HOSTNAME=mailhog
+      - AWS_REGION="ap-south-1"
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=Ti3
+      - ADMIN_KEY=test
+      - LOG_LEVEL=trace
+      - AUTO_RELOAD=false
+      - BATCH_SIZE="10"
+      - ENCRYPTION_KEY=test-encryption-key-for-ci
+      - GOOGLE_CLIENT_ID=test-client-id
+      - GOOGLE_CLIENT_SECRET=test-client-secret
+      - OPENAI_API_KEY=test-openai-key
+      
+    depends_on:
+      - db
+      - mailhog
+      - sqs
+
+  db:
+    image: mongo:latest
+    ports:
+      - "27018:27017"
+  
+  sqs:
+    image: queue:1.0
+    build:
+      context: .
+      dockerfile: Dockerfile-queue
+    ports:
+      - "9324:9324"
+      - "9325:9325"
+
+  mailhog:
+    image: anatomicjc/mailhog
+    ports:
+      - "1025:1025"  # SMTP port
+      - "8025:8025"

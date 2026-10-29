@@ -1,0 +1,10 @@
+#error-block {
+    display: none;
+    border: 1px solid darkred;
+    background-color: indianred; /* Use a HEX code for the light red background */
+    padding: 10px;
+}
+
+#error-heading {
+    color: darkred;
+}

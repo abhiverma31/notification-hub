@@ -1,0 +1,45 @@
+{
+  "entryFile": "src/server/Server.ts",
+  "noImplicitAdditionalProperties": "throw-on-extras",
+  "controllerPathGlobs": ["src/server/controllers/*.ts"],
+  "routes": {
+    "routesDir": "src/server/routes",
+    "iocModule": "src/server/utils/IoC",
+    "authenticationModule": "src/server/middlewares/Authentication",
+    "routesFileName": "Routes.ts"
+  },
+  "spec": {
+    "outputDirectory": "src/server/routes",
+    "yaml": true,
+    "host": "localhost:4000",
+    "schemes": ["http"],
+    "specVersion": 3,
+    "securityDefinitions": {
+      "admin": {
+        "type": "apiKey",
+        "name": "X-ADMIN-KEY",
+        "in": "header"
+      },
+      "org-owner": {
+        "type": "apiKey",
+        "name": "X-ORG-KEY",
+        "in": "header"
+      },
+      "org-user": {
+        "type": "apiKey",
+        "name": "X-ORG-USER-KEY",
+        "in": "header"
+      },
+      "org-lp": {
+        "type": "apiKey",
+        "name": "X-ORG-LP-KEY",
+        "in": "header"
+      },
+      "frontend-token": { 
+        "type": "apiKey",
+        "name": "Authorization",
+        "in": "header"
+      }
+    }
+  }
+}

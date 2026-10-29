@@ -1,0 +1,407 @@
+service: notification-hub
+app: notification-hub
+frameworkVersion: '3'
+
+useDotenv: true
+
+custom:
+  serverless-logging-config:
+    enableJson: true
+  customDomain:
+    domainName: api.easynotify.ai
+    stage: ${self:provider.stage}
+    basePath: ''
+    createRoute53Record: true
+    endpointType: REGIONAL
+    securityPolicy: tls_1_2
+    autoDomain: true
+    certificateArn: arn:aws:acm:ap-south-1:704973582740:certificate/fc440fba-3bb1-4a1e-ad6f-e8bf57823fb2
+    apiType: http
+    enabled: ${self:custom.isCustomDomainEnabled}
+  isCustomDomainEnabled: ${self:custom.enabledStages.${self:provider.stage}, false}
+  enabledStages:
+    production: true
+
+provider:
+  name: aws
+  architecture: x86_64
+  runtime: nodejs22.x
+  stage: ${env:NODE_ENV}
+  region: ${env:AWS_REGION}
+  logs:
+    httpApi:
+      format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","routeKey":"$context.routeKey","status":"$context.status","errorMessage":"$context.error.message","errorResponseType":"$context.error.responseType"}'
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - sqs:GetQueueAttributes
+            - sqs:GetQueueUrl
+            - sqs:SendMessage
+            - sqs:ReceiveMessage
+          Resource: !GetAtt NotificationEngineQueue.Arn
+        - Effect: Allow
+          Action:
+            - execute-api:ManageConnections
+            - execute-api:Invoke
+          Resource: 
+            - "arn:aws:execute-api:${env:AWS_REGION}:${env:${self:provider.stage}_ACCOUNT_ID}:*/*/@connections/*"
+        - Effect: Allow
+          Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+          Resource: "arn:aws:logs:${env:AWS_REGION}:${env:${self:provider.stage}_ACCOUNT_ID}:*"
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:HeadObject
+          Resource: !Sub "arn:aws:s3:::notification-hub-archival-${env:NODE_ENV}/*"
+        - Effect: Allow
+          Action:
+            - sns:Publish
+          Resource: !Ref AlertsTopic
+  environment:
+    NODE_ENV: ${env:NODE_ENV}
+    MAIL_TRANSPORT_USER: ${env:MAIL_TRANSPORT_USER}
+    MAIL_TRANSPORT_PASSWORD: ${env:MAIL_TRANSPORT_PASSWORD}
+    MONGO_CONNECTION_URL: ${env:${self:provider.stage}_MONGO_CONNECTION_URL}
+    FIREBASE_CLIENT_EMAIL: ${env:FIREBASE_CLIENT_EMAIL}
+    FIREBASE_PRIVATE_KEY: ${env:FIREBASE_PRIVATE_KEY}
+    FIREBASE_PROJECT_ID: ${env:FIREBASE_PROJECT_ID}
+    ACCESS_KEY_ID: ${env:ACCESS_KEY_ID}
+    ACCOUNT_ID: ${env:${self:provider.stage}_ACCOUNT_ID}
+    SECRET_ACCESS_KEY: ${env:SECRET_ACCESS_KEY}
+    CORS_WHITELIST_ORIGIN: ${env:${self:provider.stage}_CORS_WHITELIST_ORIGIN}
+    ADMIN_KEY: ${env:${self:provider.stage}_ADMIN_KEY}
+    LOG_LEVEL: ${env:${self:provider.stage}_LOG_LEVEL}
+    BATCH_SIZE: ${env:BATCH_SIZE}
+    ARCHIVAL_THRESHOLD_DAYS: ${env:ARCHIVAL_THRESHOLD_DAYS}
+    ENCRYPTION_KEY: ${env:ENCRYPTION_KEY}
+    GOOGLE_CLIENT_ID: ${env:GOOGLE_CLIENT_ID}
+    GOOGLE_CLIENT_SECRET: ${env:GOOGLE_CLIENT_SECRET}
+    OPENAI_API_KEY: ${env:OPENAI_API_KEY}
+    AWS_WEBSOCKET_CONNECTION_URL: ${env:${self:provider.stage}_AWS_WEBSOCKET_CONNECTION_URL}
+    CONFIG_BUCKET_NAME: ${env:${self:provider.stage}_CONFIG_BUCKET_NAME}
+    SERVER_URL: ${env:${self:provider.stage}_SERVER_URL}
+    GUPSHUP_SMS_ENABLED: ${env:GUPSHUP_SMS_ENABLED, 'false'}
+    ARCHIVAL_BUCKET_NAME: notification-hub-archival-${env:NODE_ENV}
+    ALERTS_TOPIC_ARN: !Ref AlertsTopic
+
+functions:
+  server:
+    handler: ./src/server/Server.handler
+    timeout: 15
+    events:
+      - httpApi:
+          path: '*'
+          method: '*'
+          cors:
+            allowedOrigins:
+              - ${env:CORS_WHITELIST_ORIGIN}
+            allowedHeaders:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Requested-With
+              - Accept
+              - Origin # Ensure Origin is allowed
+            allowedMethods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - PATCH
+              - OPTIONS # Include OPTIONS for preflight requests
+            allowCredentials: true # Ensure credentials are allowed
+
+  notificationEngine:
+    handler: ./src/consumer/NotificationEngine.handler
+    timeout: 30
+    events:
+      - sqs:
+          arn: !GetAtt NotificationEngineQueue.Arn
+          functionResponseType: ReportBatchItemFailures
+
+  onDeckPushNotificationEngine:
+    handler: ./src/consumer/OnDeckPushNotificationEngine.handler
+    timeout: 30
+    events:
+      - websocket:
+          route: $connect
+      - websocket:
+          route: $disconnect
+      - websocket:
+          route: $default
+      - websocket:
+          route: saveUserConnection
+
+  notificationArchivalJob:
+    handler: ./src/server/NotificationArchivalJob.handler
+    timeout: 900
+    memorySize: 3008
+    environment:
+      BATCH_SIZE: 1000
+    events:
+      - schedule:
+          rate: cron(30 22 * * ? *)
+          enabled: true
+          description: Daily archival of Notification older than threshold - Runs at 4:00 AM IST
+
+  deliveryReportHistoryArchivalJob:
+    handler: ./src/server/DeliveryReportHistoryArchivalJob.handler
+    timeout: 900
+    memorySize: 3008
+    environment:
+      ARCHIVAL_THRESHOLD_DAYS: 180  # 6 months - archive before 8-month TTL kicks in
+      BATCH_SIZE: 1000
+    events:
+      - schedule:
+          rate: cron(30 22 * * ? *)
+          enabled: true
+          description: Daily archival of DeliveryReportHistory older than 6 months - Runs at 4:00 AM IST
+
+resources:
+  Resources:
+    ArchivalBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: notification-hub-archival-${env:NODE_ENV}
+        IntelligentTieringConfigurations:
+          - Id: ArchivalIntelligentTiering
+            Status: Enabled
+            Tierings:
+              - Days: 90
+                AccessTier: ARCHIVE_ACCESS
+              - Days: 180
+                AccessTier: DEEP_ARCHIVE_ACCESS
+        LifecycleConfiguration:
+          Rules:
+            - Id: MoveToIntelligentTiering
+              Status: Enabled
+              Transitions:
+                - TransitionInDays: 0
+                  StorageClass: INTELLIGENT_TIERING
+
+    AlertsTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: NHAlertsTopic-${env:NODE_ENV}
+        Subscription:
+          - Endpoint: navsheel@technogise.com
+            Protocol: email
+          - Endpoint: rishabh.gupta@technogise.com
+            Protocol: email
+          - Endpoint: tushar@technogise.com
+            Protocol: email
+          - Endpoint: hrishabh.atre@technogise.com
+            Protocol: email
+          - Endpoint: prachi@technogise.com
+            Protocol: email
+          - Endpoint: smriti@technogise.com
+            Protocol: email
+          - Endpoint: abhishek.gore@technogise.com
+            Protocol: email
+          - Endpoint: satyam@technogise.com
+            Protocol: email
+
+    NotificationEngineDLQ:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: NotificationEngineDLQ-${env:NODE_ENV}.fifo
+        FifoQueue: true
+
+    NotificationEngineQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: NotificationEngineQueue-${env:NODE_ENV}.fifo
+        FifoQueue: true
+        ContentBasedDeduplication: false
+        VisibilityTimeout: 90
+        RedrivePolicy:
+          maxReceiveCount: 5
+          deadLetterTargetArn: !GetAtt NotificationEngineDLQ.Arn
+
+    DLQAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: One or more notification(s) have ended up in ${env:NODE_ENV} DLQ
+        Namespace: AWS/SQS
+        MetricName: ApproximateNumberOfMessagesVisible
+        Dimensions:
+          - Name: QueueName
+            Value: !GetAtt NotificationEngineDLQ.QueueName
+        Statistic: Sum
+        Period: 60
+        EvaluationPeriods: 1
+        Threshold: 0
+        ComparisonOperator: GreaterThanThreshold
+        TreatMissingData: notBreaching
+        AlarmActions:
+          - !Ref AlertsTopic
+
+    QueueFloodAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: More than 10000 items in ${env:NODE_ENV} Queue in the last 2 minutes
+        Namespace: AWS/SQS
+        MetricName: ApproximateNumberOfMessagesVisible
+        Dimensions:
+          - Name: QueueName
+            Value: !GetAtt NotificationEngineQueue.QueueName
+        Statistic: Sum
+        Period: 120
+        EvaluationPeriods: 1
+        Threshold: 10000
+        ComparisonOperator: GreaterThanThreshold
+        TreatMissingData: notBreaching
+        AlarmActions:
+          - !Ref AlertsTopic
+
+    NotificationEngineConcurrencyAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: Concurrency limit reached for ${env:NODE_ENV} NotificationEngine
+        Namespace: AWS/Lambda
+        MetricName: ConcurrentExecutions
+        Dimensions:
+          - Name: FunctionName
+            Value: notificationEngine
+        Statistic: Maximum
+        Period: 60
+        EvaluationPeriods: 1
+        Threshold: 1000
+        ComparisonOperator: GreaterThanOrEqualToThreshold
+        TreatMissingData: notBreaching
+        AlarmActions:
+          - !Ref AlertsTopic
+
+    NotificationEngineTimeoutAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: Lambda Timeout for ${env:NODE_ENV} NotificationEngine
+        Namespace: AWS/Lambda
+        MetricName: Duration
+        Dimensions:
+          - Name: FunctionName
+            Value: notificationEngine
+        Statistic: Maximum
+        Period: 60
+        EvaluationPeriods: 1
+        Threshold: 15000
+        ComparisonOperator: GreaterThanOrEqualToThreshold
+        TreatMissingData: notBreaching
+        AlarmActions:
+          - !Ref AlertsTopic
+
+    NotificationEngineMemoryUsageAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: Lambda Memory Usage for ${env:NODE_ENV} NotificationEngine
+        Namespace: AWS/Lambda
+        MetricName: MemoryUtilization
+        Dimensions:
+          - Name: FunctionName
+            Value: notificationEngine
+        Statistic: Maximum
+        Period: 60
+        EvaluationPeriods: 1
+        Threshold: 80
+        ComparisonOperator: GreaterThanOrEqualToThreshold
+        TreatMissingData: notBreaching
+        AlarmActions:
+          - !Ref AlertsTopic
+
+    OnDeckWebSocketAPI:
+      Type: AWS::ApiGatewayV2::Api
+      Properties:
+        Name: OnDeckWebSocketAPI-${env:NODE_ENV}
+        ProtocolType: WEBSOCKET
+        RouteSelectionExpression: "$request.body.action"
+
+    OnDeckWebSocketTimeoutAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: Lambda Timeout for ${env:NODE_ENV} OnDeckWebSocket
+        Namespace: AWS/Lambda
+        MetricName: Duration
+        Dimensions:
+          - Name: FunctionName
+            Value: onDeckPushNotificationEngine
+        Statistic: Maximum
+        Period: 60
+        EvaluationPeriods: 1
+        Threshold: 25000
+        ComparisonOperator: GreaterThanOrEqualToThreshold
+        TreatMissingData: notBreaching
+        AlarmActions:
+          - !Ref AlertsTopic
+
+    OnDeckWebSocketErrorAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: Lambda Errors for ${env:NODE_ENV} OnDeckWebSocket
+        Namespace: AWS/Lambda
+        MetricName: Errors
+        Dimensions:
+          - Name: FunctionName
+            Value: onDeckPushNotificationEngine
+        Statistic: Sum
+        Period: 60
+        EvaluationPeriods: 1
+        Threshold: 1
+        ComparisonOperator: GreaterThanThreshold
+        TreatMissingData: notBreaching
+        AlarmActions:
+          - !Ref AlertsTopic
+
+    NotificationArchivalJobErrorAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: Lambda Errors for ${env:NODE_ENV} NotificationArchivalJob
+        Namespace: AWS/Lambda
+        MetricName: Errors
+        Dimensions:
+          - Name: FunctionName
+            Value: notificationArchivalJob
+        Statistic: Sum
+        Period: 900
+        EvaluationPeriods: 1
+        Threshold: 0
+        ComparisonOperator: GreaterThanThreshold
+        TreatMissingData: notBreaching
+        AlarmActions:
+          - !Ref AlertsTopic
+
+    DeliveryReportHistoryArchivalJobErrorAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: Lambda Errors for ${env:NODE_ENV} DeliveryReportHistoryArchivalJob
+        Namespace: AWS/Lambda
+        MetricName: Errors
+        Dimensions:
+          - Name: FunctionName
+            Value: deliveryReportHistoryArchivalJob
+        Statistic: Sum
+        Period: 900
+        EvaluationPeriods: 1
+        Threshold: 0
+        ComparisonOperator: GreaterThanThreshold
+        TreatMissingData: notBreaching
+        AlarmActions:
+          - !Ref AlertsTopic
+
+plugins:
+  - serverless-esbuild
+  - serverless-logging-config
+  - serverless-domain-manager
+
+package:
+  excludeDevDependencies: true
+  individually: true
+  include:
+    - src/shared-library/assets/templates/**

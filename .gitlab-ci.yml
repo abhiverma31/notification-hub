@@ -1,0 +1,216 @@
+image: node:22.19.0-alpine3.21
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+stages:
+  - 🧪 Test
+  - 🛒 Deploy
+  - 💼 Migrate
+  - ⏱️ Performance
+
+Unit:
+  stage: 🧪 Test
+  before_script:
+    - if [ ! -d "node_modules" ]; then npm ci; fi
+    - npm run script:tsoa-routes-only
+  script:
+    - npm run utest
+  artifacts:
+    when: always
+    name: 'Unit Tests'
+    expire_in: 1 month
+    reports:
+      junit:
+        - unit-test-report.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage/cobertura-coverage.xml
+
+Integration:
+  stage: 🧪 Test
+  image: docker:24
+  before_script:
+    - docker-compose -f docker-compose.test.yml -p hub build
+  script:
+    - docker-compose -f docker-compose.test.yml -p hub run test npm run docker-script:run-int-tests --reporters=default --reporters=jest-junit
+  after_script:
+    - docker container cp $(docker container ls --all | grep -w test | awk '{print $1}'):./app/junit.xml ./int-test-report.xml
+    - docker-compose -f docker-compose.test.yml -p hub down --remove-orphans
+  artifacts:
+    when: always
+    name: 'Integration Tests'
+    expire_in: 1 month
+    reports:
+      junit:
+        - int-test-report.xml
+
+End-to-End:
+  stage: 🧪 Test
+  image: docker:24
+  before_script:
+    - docker-compose -f docker-compose.test.yml -p hub build
+  script:
+    - docker-compose -f docker-compose.test.yml -p hub run test npm run docker-script:run-e2e-tests --reporters=default --reporters=jest-junit
+  after_script:
+    - docker container cp $(docker container ls --all | grep -w test | awk '{print $1}'):./app/junit.xml ./e2e-test-report.xml
+    - docker-compose -f docker-compose.test.yml -p hub down --remove-orphans
+  artifacts:
+    when: always
+    name: 'E2E Tests'
+    expire_in: 1 month
+    reports:
+      junit:
+        - e2e-test-report.xml
+
+Staging:
+  stage: 🛒 Deploy
+  image: gitlab.technogise.com:5050/boutique/container-registry/aws-sso-oidc-tools:1.0
+  id_tokens:
+    MY_OIDC_TOKEN:
+      aud: https://gitlab.technogise.com
+  before_script:
+    - apk add --update nodejs npm --no-cache
+    - if [ ! -d "node_modules" ]; then npm ci; fi
+    - mkdir -p ~/.aws
+    - echo "${MY_OIDC_TOKEN}" > /tmp/web_identity_token
+    - echo -e "[profile oidc]\nrole_arn=${staging_ROLE_ARN}\nweb_identity_token_file=/tmp/web_identity_token" > ~/.aws/config
+    - export $(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" $(aws sts assume-role-with-web-identity --role-arn $staging_ROLE_ARN --role-session-name deploylambda --web-identity-token $MY_OIDC_TOKEN --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" --output text))
+    - npm run config-credentials
+  script:
+    - npm run deploy:staging
+    - aws s3 sync ./src/server/api-docs s3://staging-naas-s3-bucket/api-docs
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: always
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true
+
+Production:
+  stage: 🛒 Deploy
+  image: gitlab.technogise.com:5050/boutique/container-registry/aws-sso-oidc-tools:1.0
+  id_tokens:
+    MY_OIDC_TOKEN:
+      aud: https://gitlab.technogise.com
+  before_script:
+    - apk add --update nodejs npm --no-cache
+    - if [ ! -d "node_modules" ]; then npm ci; fi
+    - mkdir -p ~/.aws
+    - echo "${MY_OIDC_TOKEN}" > /tmp/web_identity_token
+    - echo -e "[profile oidc]\nrole_arn=${prod_ROLE_ARN}\nweb_identity_token_file=/tmp/web_identity_token" > ~/.aws/config
+    - export $(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" $(aws sts assume-role-with-web-identity --role-arn $prod_ROLE_ARN --role-session-name deploylambda --web-identity-token $MY_OIDC_TOKEN --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" --output text))
+    - npm run config-credentials
+  script:
+    - npm run deploy:prod
+    - aws s3 sync ./src/server/api-docs s3://production-naas-s3-bucket/api-docs
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true
+
+Staging-Migrate:
+  stage: 💼 Migrate
+  before_script:
+    - if [ ! -d "node_modules" ]; then npm ci; fi
+  script:
+    - npm run script:run-schema-migration staging
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: always
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true
+  needs:
+    - Staging
+
+Production-Migrate:
+  stage: 💼 Migrate
+  before_script:
+    - if [ ! -d "node_modules" ]; then npm ci; fi
+  script:
+    - npm run script:run-schema-migration prod
+  timeout: 3 hours
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true
+  needs:
+    - Production
+
+Health:
+  stage: ⏱️ Performance
+  image:
+    name: grafana/k6:latest
+    entrypoint: ['']
+  script:
+    - k6 run tests/perftest/Health.js
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: never
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true
+  artifacts:
+    when: always
+    name: 'Performance: Health'
+    expire_in: 6 months
+    reports:
+      load_performance:
+        - perf-report.json
+    paths:
+      - perf-report.html
+
+Send Notifications:
+  stage: ⏱️ Performance
+  image:
+    name: grafana/k6:latest
+    entrypoint: ['']
+  script:
+    - k6 run tests/perftest/SendNotifications.js
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: never
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true
+  needs:
+    - Health
+  artifacts:
+    when: always
+    name: 'Performance: Send Notifications'
+    expire_in: 6 months
+    reports:
+      load_performance:
+        - perf-report.json
+    paths:
+      - perf-report.html
+
+Get On Deck Notifications:
+  stage: ⏱️ Performance
+  image:
+    name: grafana/k6:latest
+    entrypoint: ['']
+  script:
+    - k6 run tests/perftest/GetOnDeckNotifications.js
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: never
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true
+  needs:
+    - Health
+    - Send Notifications
+  artifacts:
+    when: always
+    name: 'Performance: Get OnDeck Notifications'
+    expire_in: 6 months
+    reports:
+      load_performance:
+        - perf-report.json
+    paths:
+      - perf-report.html

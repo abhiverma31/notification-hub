@@ -1,0 +1,86 @@
+service: notification-hub
+app: notification-hub
+frameworkVersion: '3'
+
+useDotenv: true
+
+custom:
+  stage: ${opt:stage, 'offline'}
+  esbuild:
+    sourcemap: true
+
+  serverless-offline-sqs:
+    autoCreate: false
+    apiVersion: '2012-11-05'
+    endpoint: ${env:SQS_OFFLINE_URL}
+    region: ap-south-1
+    accessKeyId: root
+    secretAccessKey: root
+    skipCacheInvalidation: false
+    reloadHandler: false
+
+provider:
+  name: aws
+  architecture: x86_64
+  runtime: nodejs22.x
+  stage: offline
+  region: ap-south-1
+  environment:
+    NODE_OPTIONS: '--enable-source-maps'
+    NODE_ENV: ${env:NODE_ENV}
+    SQS_OFFLINE_URL: ${env:SQS_OFFLINE_URL}
+    MAIL_TRANSPORT_USER: ${env:MAIL_TRANSPORT_USER}
+    MAIL_TRANSPORT_PASSWORD: ${env:MAIL_TRANSPORT_PASSWORD}
+    MONGO_CONNECTION_URL: ${env:MONGO_CONNECTION_URL}
+    API_SECRET: ${env:API_SECRET}
+    FIREBASE_CLIENT_EMAIL: ${env:FIREBASE_CLIENT_EMAIL}
+    FIREBASE_PRIVATE_KEY: ${env:FIREBASE_PRIVATE_KEY}
+    FIREBASE_PROJECT_ID: ${env:FIREBASE_PROJECT_ID}
+    ACCOUNT_ID: ${env:ACCOUNT_ID}
+    CORS_WHITELIST_ORIGIN: ${env:CORS_WHITELIST_ORIGIN}
+    MAILER_HOSTNAME: ${env:MAILER_HOSTNAME}
+    ADMIN_KEY: ${env:ADMIN_KEY}
+    LOG_LEVEL: ${env:LOG_LEVEL}
+    BATCH_SIZE: ${env:BATCH_SIZE}
+    GOOGLE_CLIENT_ID: ${env:GOOGLE_CLIENT_ID}
+    GOOGLE_CLIENT_SECRET: ${env:GOOGLE_CLIENT_SECRET}
+    OPENAI_API_KEY: ${env:OPENAI_API_KEY}
+    ENCRYPTION_KEY: ${env:ENCRYPTION_KEY}
+
+functions:
+  notificationEngine:
+    handler: ./src/consumer/NotificationEngine.handler
+    timeout: 60
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - NotificationEngineQueue
+              - Arn
+
+resources:
+  Resources:
+    NotificationEngineDLQ:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: NotificationEngineDLQ.fifo
+        FifoQueue: true
+
+    NotificationEngineQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: NotificationEngineQueue.fifo
+        FifoQueue: true
+        ContentBasedDeduplication: false
+        VisibilityTimeout: 30
+        RedrivePolicy:
+          deadLetterTargetArn:
+            Fn::GetAtt:
+              - NotificationEngineDLQ
+              - Arn
+          maxReceiveCount: 3
+
+plugins:
+  - serverless-esbuild
+  - serverless-offline
+  - serverless-offline-sqs
