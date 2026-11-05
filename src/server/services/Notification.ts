@@ -132,9 +132,9 @@ export class NotificationService {
           currentBatchRecipients,
         );
         allBatches.push(batchEntries);
-
-        return allBatches;
       }
+
+      return allBatches;
     }
     if ([ChannelType.SLACK, ChannelType.TEAMS, ChannelType.TELEGRAM].some((type) => channelNames.includes(type))) {
       const batchEntries = await BatchUtil.constructBatchQueueMessage(data, channels, organisation);

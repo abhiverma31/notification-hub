@@ -131,6 +131,52 @@ describe('NotificationService', () => {
     expect(responses.transactions).toHaveLength(3);
   });
 
+  it('should send all recipient batches when there are more than 10 recipients', async () => {
+    const recipients: UserDto[] = Array.from({ length: 21 }, (_, index) => ({
+      email: `test${index}@test.com`,
+      channels: [ChannelType.EMAIL],
+    }));
+    const entries = recipients.map((recipient, index) => ({
+      Id: `msg${index}`,
+      MessageBody: JSON.stringify({
+        recipients: [{ email: recipient.email, channel: ChannelType.EMAIL }],
+      }),
+    }));
+    const batches = [entries.slice(0, 10), entries.slice(10, 20), entries.slice(20)];
+    for (const batch of batches) {
+      (BatchUtil.constructBatchQueueMessage as jest.Mock).mockResolvedValueOnce(batch);
+    }
+    sqsMock.on(SendMessageBatchCommand).callsFake((input) => ({
+      Successful: input.Entries.map((entry) => ({ Id: entry.Id, MessageId: `sent-${entry.Id}` })),
+      Failed: [],
+      $metadata: { httpStatusCode: 200 },
+    }));
+
+    const response = await notificationService.sendNotification(recipients, data, organisation, emailChannels);
+
+    expect(BatchUtil.constructBatchQueueMessage).toHaveBeenCalledTimes(3);
+    for (let index = 0; index < batches.length; index++) {
+      expect(BatchUtil.constructBatchQueueMessage).toHaveBeenNthCalledWith(
+        index + 1,
+        data,
+        emailChannels,
+        organisation,
+        recipients.slice(index * 10, (index + 1) * 10).map((recipient) =>
+          expect.objectContaining({ email: recipient.email, channel: ChannelType.EMAIL }),
+        ),
+      );
+    }
+    expect(sqsMock.commandCalls(SendMessageBatchCommand).map((call) => call.args[0].input.Entries)).toEqual(batches);
+    expect(response.transactions).toHaveLength(21);
+    expect(response.transactions).toEqual(
+      expect.arrayContaining(recipients.map((recipient, index) => ({
+        id: `sent-msg${index}`,
+        recipient: recipient.email,
+        channel: ChannelType.EMAIL,
+      }))),
+    );
+  });
+
   it('should return array of transaction id including failure for channel onDeck', async () => {
     const mockResponse: SendMessageBatchCommandOutput = {
       Successful: [{ Id: 'msg1', MessageId: '12345', MD5OfMessageBody: 'd41d8cd98f00b204e9800998ecf8427e' }],
