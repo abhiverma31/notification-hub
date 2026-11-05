@@ -5,7 +5,11 @@ describe('Health Check API', () => {
   const adminKey = process.env.ADMIN_KEY || 'test';
 
   it('should handle GET /api/health', async () => {
-    await request('http://localhost:4000').get('/api/health').set('X-ADMIN-KEY', adminKey).expect(200).expect('"OK"');
+    await request('http://localhost:4000')
+      .get('/api/health')
+      .set('X-ADMIN-KEY', adminKey)
+      .expect(200)
+      .expect({ status: 'OK', service: 'notification-hub' });
   });
 
   it('should throw 403 Forbidden on sending invalid Api Key', async () => {
