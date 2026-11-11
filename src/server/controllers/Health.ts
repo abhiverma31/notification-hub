@@ -24,6 +24,8 @@ export class HealthController extends Controller {
   @SuccessResponse('200', 'OK')
   @Hidden()
   public get(): string {
+    // Health probes must reach the server instead of reusing a cached response.
+    this.setHeader('Cache-Control', 'no-store');
     const healthStatus = this.healthService.checkHealth();
     this.setStatus(HttpStatusCode.OK);
 

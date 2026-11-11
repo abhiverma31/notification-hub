@@ -19,6 +19,12 @@ describe('Health controller', () => {
     expect(expectedResponse).toBe('OK');
   });
 
+  it('should prevent health responses from being cached', () => {
+    healthController.get();
+
+    expect(healthController.getHeaders()).toEqual({ 'Cache-Control': 'no-store' });
+  });
+
   afterEach(() => {
     jest.clearAllMocks();
   });
